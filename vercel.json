@@ -1,0 +1,29 @@
+{
+  "buildCommand": "npm run build",
+  "framework": "nextjs",
+  "installCommand": "npm install",
+  "devCommand": "npm run dev",
+  "outputDirectory": ".next",
+  "functions": {
+    "src/app/api/**/*.ts": {
+      "maxDuration": 60
+    }
+  },
+  "headers": [
+    {
+      "source": "/api/(.*)",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "no-store, max-age=0"
+        }
+      ]
+    }
+  ],
+  "env": {
+    "DATABASE_URL": "@database-url",
+    "UPSTOX_API_KEY": "@upstox-api-key",
+    "UPSTOX_API_SECRET": "@upstox-api-secret",
+    "UPSTOX_ACCESS_TOKEN": "@upstox-access-token"
+  }
+}
