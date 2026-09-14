@@ -1,20 +1,22 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { scanMultipleStocks, ScannerConfig } from '@/lib/scanner';
-import { getAllSymbols, getInstrumentKeyForSymbol } from '@/lib/upstox';
+import { getAllSymbols, getInstrumentKeyForSymbol, isNseMarketOpen } from '@/lib/upstox';
 
 export const dynamic = 'force-dynamic';
-export const maxDuration = 60; // Maximum execution time for Vercel
+export const maxDuration = 60;
 
 export async function POST(request: NextRequest) {
+  const startedAt = Date.now();
+
   try {
-    const body = await request.json();
+    const body = await request.json().catch(() => ({}));
     const {
       timeframe = '5minute',
       volumeMultiplier = 2,
       priceThreshold = 50,
+      forceScan = false,
     } = body;
 
-    // Validate environment variables
     const accessToken = process.env.UPSTOX_ACCESS_TOKEN;
     if (!accessToken) {
       return NextResponse.json(
@@ -23,45 +25,72 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Prepare scanner configuration
+    const now = new Date();
+    if (!forceScan && !isNseMarketOpen(now)) {
+      return NextResponse.json({
+        success: true,
+        marketOpen: false,
+        count: 0,
+        results: [],
+        scanned: 0,
+        totalStocks: getAllSymbols().length,
+        scannedAt: now.toISOString(),
+        durationMs: Date.now() - startedAt,
+        message: 'NSE market is closed. Scanning runs automatically from 09:15 AM to 03:30 PM IST.',
+        config: { timeframe, volumeMultiplier: Number(volumeMultiplier), priceThreshold: Number(priceThreshold) },
+      });
+    }
+
+    if (!['1minute', '3minute', '5minute'].includes(timeframe)) {
+      return NextResponse.json({ error: 'Invalid timeframe' }, { status: 400 });
+    }
+
     const config: ScannerConfig = {
-      timeframe: timeframe as '1minute' | '3minute' | '5minute',
-      volumeMultiplier: parseFloat(volumeMultiplier),
-      priceThreshold: parseFloat(priceThreshold),
+      timeframe: timeframe as ScannerConfig['timeframe'],
+      volumeMultiplier: Number(volumeMultiplier),
+      priceThreshold: Number(priceThreshold),
     };
 
-    // Build instrument key map
-    const allSymbols = getAllSymbols();
-    const instrumentKeyMap: { [symbol: string]: string } = {};
-    allSymbols.forEach((symbol) => {
-      const key = getInstrumentKeyForSymbol(symbol);
-      if (key) {
-        instrumentKeyMap[symbol] = key;
-      }
-    });
+    if (!Number.isFinite(config.volumeMultiplier) || config.volumeMultiplier <= 0) {
+      return NextResponse.json({ error: 'Invalid volume multiplier' }, { status: 400 });
+    }
+    if (!Number.isFinite(config.priceThreshold) || config.priceThreshold < 0) {
+      return NextResponse.json({ error: 'Invalid price threshold' }, { status: 400 });
+    }
 
-    // Run the scan
+    const allSymbols = getAllSymbols();
+    const instrumentKeyMap: Record<string, string> = {};
+    for (const symbol of allSymbols) {
+      const key = getInstrumentKeyForSymbol(symbol);
+      if (key) instrumentKeyMap[symbol] = key;
+    }
+
     const results = await scanMultipleStocks(
       allSymbols,
       instrumentKeyMap,
       config,
       accessToken,
-      300 // 300ms delay between stocks to respect rate limits
+      10
     );
 
     return NextResponse.json({
       success: true,
+      marketOpen: true,
       count: results.length,
-      results: results.sort((a, b) => b.volumeMultiple - a.volumeMultiple), // Sort by volume multiple descending
+      scanned: allSymbols.length,
+      totalStocks: allSymbols.length,
+      results: results.sort((a, b) => b.volumeMultiple - a.volumeMultiple),
       scannedAt: new Date().toISOString(),
+      durationMs: Date.now() - startedAt,
       config,
     });
   } catch (error) {
     console.error('Scan error:', error);
     return NextResponse.json(
-      { 
+      {
         error: 'Failed to scan stocks',
-        message: error instanceof Error ? error.message : 'Unknown error'
+        message: error instanceof Error ? error.message : 'Unknown error',
+        durationMs: Date.now() - startedAt,
       },
       { status: 500 }
     );
@@ -70,11 +99,7 @@ export async function POST(request: NextRequest) {
 
 export async function GET() {
   return NextResponse.json({
-    message: 'Stock scanner API - Use POST method with configuration',
-    example: {
-      timeframe: '5minute',
-      volumeMultiplier: 2,
-      priceThreshold: 50,
-    },
+    message: 'Stock scanner API - use POST /api/scan',
+    marketHours: '09:15-15:30 IST, Monday-Friday',
   });
 }
