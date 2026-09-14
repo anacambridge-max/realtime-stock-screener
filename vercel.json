@@ -19,11 +19,5 @@
         }
       ]
     }
-  ],
-  "env": {
-    "DATABASE_URL": "@database-url",
-    "UPSTOX_API_KEY": "@upstox-api-key",
-    "UPSTOX_API_SECRET": "@upstox-api-secret",
-    "UPSTOX_ACCESS_TOKEN": "@upstox-access-token"
-  }
+  ]
 }
