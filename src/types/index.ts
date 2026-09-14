@@ -1,7 +1,11 @@
-// API Response types
 export interface ScanResponse {
   success: boolean;
   count: number;
+  scanned: number;
+  totalStocks: number;
+  marketOpen: boolean;
+  durationMs?: number;
+  message?: string;
   results: ScanResult[];
   scannedAt: string;
   config: ScannerConfig;
@@ -27,7 +31,6 @@ export interface ScannerConfig {
   priceThreshold: number;
 }
 
-// Upstox API types
 export interface CandleData {
   timestamp: string;
   open: number;
