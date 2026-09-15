@@ -1,5 +1,6 @@
 import {
   getHistoricalData,
+  getIntradayData,
   calculateSMA,
   formatDateForAPI,
   CandleData,
@@ -53,21 +54,24 @@ export async function scanStock(
     const todayStr = formatDateForAPI(today);
     const fromStr = formatDateForAPI(new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000));
 
-    // One V3 historical request per stock supplies both today's candles and
-    // the previous completed trading session, including NSE holiday handling.
-    const candles = await getHistoricalData(instrumentKey, config.timeframe, fromStr, todayStr, accessToken);
-    if (!candles.length) return [];
+    // Historical V3 is used for completed sessions. Current-day candles come
+    // from the dedicated Intraday V3 endpoint, which is required during live
+    // market hours.
+    const [historicalCandles, todayCandlesRaw] = await Promise.all([
+      getHistoricalData(instrumentKey, config.timeframe, fromStr, todayStr, accessToken),
+      getIntradayData(instrumentKey, config.timeframe, accessToken),
+    ]);
 
-    const groups = getTradingDayGroups(candles);
-    const todayCandles = groups.get(todayStr) ?? [];
-    if (!todayCandles.length) return [];
-
-    const tradingDays = [...groups.keys()].sort();
-    const previousTradingDay = tradingDays.filter((day) => day < todayStr).pop();
+    const groups = getTradingDayGroups(historicalCandles);
+    const tradingDays = [...groups.keys()].filter((day) => day < todayStr).sort();
+    const previousTradingDay = tradingDays.pop();
     if (!previousTradingDay) return [];
 
     const previousCandles = groups.get(previousTradingDay) ?? [];
-    if (!previousCandles.length) return [];
+    const todayCandles = [...todayCandlesRaw].sort(
+      (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+    );
+    if (!previousCandles.length || !todayCandles.length) return [];
 
     const currentCandle = todayCandles[todayCandles.length - 1];
     const baselineVolumes = previousCandles
@@ -97,6 +101,8 @@ export async function scanStock(
     };
 
     const results: ScanResult[] = [];
+    // A signal is generated only when the LIVE candle itself breaks the
+    // previous session's level, so the alert is actionable at scan time.
     if (currentCandle.high > prevDayHigh) results.push({ ...base, direction: 'BULLISH BREAKOUT' });
     if (currentCandle.low < prevDayLow) results.push({ ...base, direction: 'BEARISH BREAKDOWN' });
     return results;
@@ -111,7 +117,7 @@ export async function scanMultipleStocks(
   instrumentKeyMap: { [symbol: string]: string },
   config: ScannerConfig,
   accessToken: string,
-  concurrency = 10
+  concurrency = 15
 ): Promise<ScanResult[]> {
   const allResults: ScanResult[] = [];
   let cursor = 0;
