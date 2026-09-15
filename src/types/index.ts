@@ -12,11 +12,17 @@ export interface ScanResponse {
   error?: string;
 }
 
+export type SignalDirection = 'BULLISH BREAKOUT' | 'BEARISH BREAKDOWN';
+
 export interface ScanResult {
   symbol: string;
   ltp: number;
+  dayChange: number;
+  dayChangePercent: number;
   volumeMultiple: number;
-  direction: 'BULLISH BREAKOUT' | 'BEARISH BREAKDOWN';
+  direction: SignalDirection;
+  setup: 'BREAKOUT' | 'BREAKDOWN';
+  confirmed: boolean;
   prevDayHigh: number;
   prevDayLow: number;
   dailyHigh: number;
