@@ -6,11 +6,17 @@ import {
   CandleData,
 } from './upstox';
 
+export type SignalDirection = 'BULLISH BREAKOUT' | 'BEARISH BREAKDOWN';
+
 export interface ScanResult {
   symbol: string;
   ltp: number;
+  dayChange: number;
+  dayChangePercent: number;
   volumeMultiple: number;
-  direction: 'BULLISH BREAKOUT' | 'BEARISH BREAKDOWN';
+  direction: SignalDirection;
+  setup: 'BREAKOUT' | 'BREAKDOWN';
+  confirmed: boolean;
   prevDayHigh: number;
   prevDayLow: number;
   dailyHigh: number;
@@ -54,9 +60,6 @@ export async function scanStock(
     const todayStr = formatDateForAPI(today);
     const fromStr = formatDateForAPI(new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000));
 
-    // Historical V3 is used for completed sessions. Current-day candles come
-    // from the dedicated Intraday V3 endpoint, which is required during live
-    // market hours.
     const [historicalCandles, todayCandlesRaw] = await Promise.all([
       getHistoricalData(instrumentKey, config.timeframe, fromStr, todayStr, accessToken),
       getIntradayData(instrumentKey, config.timeframe, accessToken),
@@ -74,6 +77,9 @@ export async function scanStock(
     if (!previousCandles.length || !todayCandles.length) return [];
 
     const currentCandle = todayCandles[todayCandles.length - 1];
+    const previousClose = previousCandles[previousCandles.length - 1].close;
+    if (!Number.isFinite(previousClose) || previousClose <= 0) return [];
+
     const baselineVolumes = previousCandles
       .map((candle) => candle.volume)
       .filter((volume) => Number.isFinite(volume) && volume >= 0);
@@ -88,9 +94,14 @@ export async function scanStock(
     const dailyHigh = Math.max(...todayCandles.map((candle) => candle.high));
     if (dailyHigh <= config.priceThreshold) return [];
 
+    const dayChange = currentCandle.close - previousClose;
+    const dayChangePercent = (dayChange / previousClose) * 100;
+
     const base = {
       symbol,
       ltp: currentCandle.close,
+      dayChange: Number(dayChange.toFixed(2)),
+      dayChangePercent: Number(dayChangePercent.toFixed(2)),
       volumeMultiple: Number(volumeMultiple.toFixed(2)),
       prevDayHigh,
       prevDayLow,
@@ -98,13 +109,16 @@ export async function scanStock(
       currentVolume: currentCandle.volume,
       avgVolume,
       triggeredAt: currentCandle.timestamp,
+      confirmed: true,
     };
 
     const results: ScanResult[] = [];
-    // A signal is generated only when the LIVE candle itself breaks the
-    // previous session's level, so the alert is actionable at scan time.
-    if (currentCandle.high > prevDayHigh) results.push({ ...base, direction: 'BULLISH BREAKOUT' });
-    if (currentCandle.low < prevDayLow) results.push({ ...base, direction: 'BEARISH BREAKDOWN' });
+    if (currentCandle.high > prevDayHigh) {
+      results.push({ ...base, direction: 'BULLISH BREAKOUT', setup: 'BREAKOUT' });
+    }
+    if (currentCandle.low < prevDayLow) {
+      results.push({ ...base, direction: 'BEARISH BREAKDOWN', setup: 'BREAKDOWN' });
+    }
     return results;
   } catch (error) {
     console.error(`Error scanning ${symbol}:`, error);
