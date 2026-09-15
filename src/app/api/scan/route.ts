@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { scanMultipleStocks, ScannerConfig } from '@/lib/scanner';
-import { getAllSymbols, getInstrumentKeyForSymbol, isNseMarketOpen } from '@/lib/upstox';
+import { getCurrentFnoUniverse, isNseMarketOpen } from '@/lib/upstox';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -19,21 +19,20 @@ export async function POST(request: NextRequest) {
 
     const accessToken = process.env.UPSTOX_ACCESS_TOKEN;
     if (!accessToken) {
-      return NextResponse.json(
-        { error: 'Upstox access token not configured' },
-        { status: 500 }
-      );
+      return NextResponse.json({ error: 'Upstox access token not configured' }, { status: 500 });
     }
 
     const now = new Date();
     if (!forceScan && !isNseMarketOpen(now)) {
+      let totalStocks = 0;
+      try { totalStocks = (await getCurrentFnoUniverse()).symbols.length; } catch { totalStocks = 0; }
       return NextResponse.json({
         success: true,
         marketOpen: false,
         count: 0,
         results: [],
         scanned: 0,
-        totalStocks: getAllSymbols().length,
+        totalStocks,
         scannedAt: now.toISOString(),
         durationMs: Date.now() - startedAt,
         message: 'NSE market is closed. Scanning runs automatically from 09:15 AM to 03:30 PM IST.',
@@ -58,27 +57,24 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Invalid price threshold' }, { status: 400 });
     }
 
-    const allSymbols = getAllSymbols();
-    const instrumentKeyMap: Record<string, string> = {};
-    for (const symbol of allSymbols) {
-      const key = getInstrumentKeyForSymbol(symbol);
-      if (key) instrumentKeyMap[symbol] = key;
-    }
+    // Pull the live F&O universe from Upstox's daily instrument master rather
+    // than the old hard-coded 30-stock list.
+    const { symbols, instrumentKeyMap } = await getCurrentFnoUniverse();
 
     const results = await scanMultipleStocks(
-      allSymbols,
+      symbols,
       instrumentKeyMap,
       config,
       accessToken,
-      10
+      15
     );
 
     return NextResponse.json({
       success: true,
       marketOpen: true,
       count: results.length,
-      scanned: allSymbols.length,
-      totalStocks: allSymbols.length,
+      scanned: symbols.length,
+      totalStocks: symbols.length,
       results: results.sort((a, b) => b.volumeMultiple - a.volumeMultiple),
       scannedAt: new Date().toISOString(),
       durationMs: Date.now() - startedAt,
@@ -86,14 +82,11 @@ export async function POST(request: NextRequest) {
     });
   } catch (error) {
     console.error('Scan error:', error);
-    return NextResponse.json(
-      {
-        error: 'Failed to scan stocks',
-        message: error instanceof Error ? error.message : 'Unknown error',
-        durationMs: Date.now() - startedAt,
-      },
-      { status: 500 }
-    );
+    return NextResponse.json({
+      error: 'Failed to scan stocks',
+      message: error instanceof Error ? error.message : 'Unknown error',
+      durationMs: Date.now() - startedAt,
+    }, { status: 500 });
   }
 }
 
